@@ -1,0 +1,16 @@
+version: 0.2
+
+phases:
+    install:
+        commands:
+          - echo Starting build...
+          - apt update -y
+          - sudo apt install gnupg software-properties-common pip python3 tar gzip zip
+    pre_build:
+        commands:
+          - echo Pre build placeholder...
+    build:
+        commands:
+          - "echo Building..."
+          - "./script_1.sh $AWS_REGION"
+          - "[ $? -eq 0 ] && ./script_2.sh $AWS_REGION"
