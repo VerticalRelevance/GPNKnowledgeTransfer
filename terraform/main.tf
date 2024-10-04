@@ -114,11 +114,10 @@ resource "aws_api_gateway_integration" "graphql_options_integration" {
 #   }
 # }
 
-
-# Stage for deployment
+# Create a deployment resource
 resource "aws_api_gateway_deployment" "mock_api_deployment" {
   rest_api_id = aws_api_gateway_rest_api.mock_api.id
-  stage_name  = "test"
+  stage_name  = "test" 
 
   depends_on = [
     aws_api_gateway_method.graphql_post,
@@ -187,4 +186,137 @@ resource "aws_apigatewayv2_route" "ws_route" {
   api_id    = aws_apigatewayv2_api.websocket_api.id
   route_key = "$default"
   target    = "integrations/${aws_apigatewayv2_integration.ws_integration.id}"
+}
+
+# Create a role for API Gateway to write logs to CloudWatch
+resource "aws_iam_role" "apigateway_cloudwatch_role" {
+  name = "APIGatewayCloudWatchLogsRole"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          Service = "apigateway.amazonaws.com"
+        },
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+# Attach a policy to allow the role to write to CloudWatch
+resource "aws_iam_role_policy" "apigateway_cloudwatch_policy" {
+  role = aws_iam_role.apigateway_cloudwatch_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        Resource = "arn:aws:logs:*:*:*"
+      }
+    ]
+  })
+}
+
+# Stage for deployment
+resource "aws_api_gateway_stage" "mock_api_stage" {
+  rest_api_id   = aws_api_gateway_rest_api.mock_api.id
+  stage_name    = "test"
+  deployment_id = aws_api_gateway_deployment.mock_api_deployment.id
+
+  lifecycle {
+    ignore_changes = [stage_name]  # This will prevent Terraform from creating the stage if it exists
+  }
+}
+
+# Method settings for API Gateway stage
+resource "aws_api_gateway_method_settings" "mock_api_stage_method_settings" {
+  rest_api_id = aws_api_gateway_rest_api.mock_api.id
+  stage_name  = aws_api_gateway_stage.mock_api_stage.stage_name
+
+  method_path = "*/*"
+  settings {
+    metrics_enabled      = true
+    logging_level        = "INFO"
+    data_trace_enabled   = true
+  }
+}
+
+# CloudWatch log group for API Gateway logging
+resource "aws_cloudwatch_log_group" "api_gateway_logs" {
+  name              = "/aws/apigateway/mock-api"
+  retention_in_days = 14
+}
+
+# WebSocket API Deployment
+resource "aws_apigatewayv2_deployment" "ws_deployment" {
+  api_id = aws_apigatewayv2_api.websocket_api.id
+}
+
+# WebSocket API Stage with CloudWatch Logs
+resource "aws_apigatewayv2_stage" "ws_stage" {
+  api_id      = aws_apigatewayv2_api.websocket_api.id
+  name        = "production"
+#   deployment_id = aws_apigatewayv2_deployment.ws_deployment.id
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.websocket_api_logs.arn
+    format          = jsonencode({
+      requestId       = "$context.requestId"
+      ip              = "$context.identity.sourceIp"
+      caller          = "$context.identity.caller"
+      user            = "$context.identity.user"
+      requestTime     = "$context.requestTime"
+      httpMethod      = "$context.httpMethod"
+      resourcePath    = "$context.resourcePath"
+      status          = "$context.status"
+      protocol        = "$context.protocol"
+      responseLength  = "$context.responseLength"
+    })
+  }
+
+  auto_deploy = true
+}
+
+# CloudWatch Log Group for WebSocket API
+resource "aws_cloudwatch_log_group" "websocket_api_logs" {
+  name              = "/aws/websocket/AppSyncWebSocketAPI"
+  retention_in_days = 14
+}
+
+# IAM Role for API Gateway logging permissions
+resource "aws_iam_role" "apigw_logging_role" {
+  name = "APIGatewayLoggingRole"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          Service = "apigateway.amazonaws.com"
+        },
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+# Attach CloudWatch log policy to the API Gateway role
+resource "aws_iam_role_policy_attachment" "attach_logging_policy" {
+  role       = aws_iam_role.apigw_logging_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+}
+
+# Set the CloudWatch Logs Role in API Gateway Account Settings
+resource "aws_api_gateway_account" "account" {
+  cloudwatch_role_arn = aws_iam_role.apigw_logging_role.arn
 }
