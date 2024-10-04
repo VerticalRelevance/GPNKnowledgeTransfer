@@ -17,6 +17,10 @@ amplifyconfiguration.json
 amplify-build-config.json
 amplify-gradle-config.json
 amplifyxc.config
+terraform/.terraform
+terraform/.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
 
 ### Linux ###
 *~
