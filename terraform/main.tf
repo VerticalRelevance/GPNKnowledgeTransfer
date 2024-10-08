@@ -94,25 +94,26 @@ resource "aws_api_gateway_integration" "graphql_options_integration" {
   request_templates = {
     "application/json" = "{\"statusCode\": 200}"
   }
+  depends_on = [ aws_api_gateway_method.graphql_options ]
 }
 
-# # Integration response for OPTIONS (CORS)
-# resource "aws_api_gateway_integration_response" "graphql_options_integration_response" {
-#   rest_api_id = aws_api_gateway_rest_api.mock_api.id
-#   resource_id = aws_api_gateway_resource.graphql_resource.id
-#   http_method = aws_api_gateway_method.graphql_options.http_method
-#   status_code = "200"
+# Integration response for OPTIONS (CORS)
+resource "aws_api_gateway_integration_response" "graphql_options_integration_response" {
+  rest_api_id = aws_api_gateway_rest_api.mock_api.id
+  resource_id = aws_api_gateway_resource.graphql_resource.id
+  http_method = aws_api_gateway_method.graphql_options.http_method
+  status_code = "200"
 
-#   response_parameters = {
-#     "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
-#     "method.response.header.Access-Control-Allow-Methods" = "'OPTIONS,POST'"
-#     "method.response.header.Access-Control-Allow-Origin"  = "'*'"
-#   }
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+    "method.response.header.Access-Control-Allow-Methods" = "'OPTIONS,POST'",
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+  }
 
-#   response_templates = {
-#     "application/json" = ""
-#   }
-# }
+  response_templates = {
+    "application/json" = ""
+  }
+}
 
 # Create a deployment resource
 resource "aws_api_gateway_deployment" "mock_api_deployment" {
@@ -142,6 +143,15 @@ resource "aws_api_gateway_method_response" "graphql_options_response" {
   resource_id = aws_api_gateway_resource.graphql_resource.id
   http_method = aws_api_gateway_method.graphql_options.http_method
   status_code = "200"
+  response_models = {
+    "application/json" = "Empty"
+  }
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true,
+    "method.response.header.Access-Control-Allow-Methods" = true,
+    "method.response.header.Access-Control-Allow-Origin" = true
+  }
+  depends_on = [ aws_api_gateway_method.graphql_options ]
 }
 
 # IAM role for API Gateway to interact with AppSync
