@@ -91,8 +91,8 @@ resource "aws_api_gateway_integration" "graphql_post_integration" {
   credentials            = "arn:aws:iam::615299770864:role/APIGatewayGraphProxyRole"
 
   request_parameters = {
-    "integration.request.header.x-api-key" = "'da2-taltenepfrc7rdxxdufii5yhvy'",
-    "integration.request.header.Authorization"  = "method.request.header.Authorization"  # Pass Cognito token
+    "integration.request.header.Authorization" = "context.authorizer.claims['cognito:username']"
+    "integration.request.header.x-api-key"     = "context.requestOverride.headers['x-api-key']"
   }
 
   passthrough_behavior = "WHEN_NO_TEMPLATES"
