@@ -51,12 +51,25 @@ resource "aws_api_gateway_method" "graphql_post" {
   rest_api_id   = aws_api_gateway_rest_api.mock_api.id
   resource_id   = aws_api_gateway_resource.graphql_resource.id
   http_method   = "POST"
-  authorization = "NONE"
-  api_key_required = false
+  # Cognito User Pool authorization
+  authorization = "COGNITO_USER_POOLS"
+  authorizer_id = aws_api_gateway_authorizer.cognito_authorizer.id  # Cognito Authorizer
+  
+  api_key_required = true
 
   request_parameters = {
     "method.request.header.x-api-key" = true
   }
+}
+
+resource "aws_api_gateway_authorizer" "cognito_authorizer" {
+  rest_api_id = aws_api_gateway_rest_api.mock_api.id
+  name        = "CognitoUserPoolAuthorizer"
+  type        = "COGNITO_USER_POOLS"
+
+  # Point to your existing Cognito User Pool
+  identity_source = "method.request.header.Authorization"
+  provider_arns   = [aws_cognito_user_pool.user_pool.arn]
 }
 
 # OPTIONS method for CORS handling
@@ -78,7 +91,8 @@ resource "aws_api_gateway_integration" "graphql_post_integration" {
   credentials            = "arn:aws:iam::615299770864:role/APIGatewayGraphProxyRole"
 
   request_parameters = {
-    "integration.request.header.x-api-key" = "'da2-taltenepfrc7rdxxdufii5yhvy'"
+    "integration.request.header.x-api-key" = "'da2-taltenepfrc7rdxxdufii5yhvy'",
+    "integration.request.header.Authorization"  = "method.request.header.Authorization"  # Pass Cognito token
   }
 
   passthrough_behavior = "WHEN_NO_TEMPLATES"
@@ -177,27 +191,156 @@ resource "aws_iam_role_policy_attachment" "appsync_access" {
   policy_arn = "arn:aws:iam::aws:policy/AWSAppSyncInvokeFullAccess"
 }
 
+# Stage for deployment
+resource "aws_api_gateway_stage" "mock_api_stage" {
+  rest_api_id   = aws_api_gateway_rest_api.mock_api.id
+  stage_name    = "test"
+  deployment_id = aws_api_gateway_deployment.mock_api_deployment.id
+
+  lifecycle {
+    ignore_changes = [stage_name]  # This will prevent Terraform from creating the stage if it exists
+  }
+}
+
+# Method settings for API Gateway stage
+resource "aws_api_gateway_method_settings" "mock_api_stage_method_settings" {
+  rest_api_id = aws_api_gateway_rest_api.mock_api.id
+  stage_name  = aws_api_gateway_stage.mock_api_stage.stage_name
+
+  method_path = "*/*"
+  settings {
+    metrics_enabled      = true
+    logging_level        = "INFO"
+    data_trace_enabled   = true
+  }
+}
+
+# WEBSOCKET
 # WebSocket API Configuration
 resource "aws_apigatewayv2_api" "websocket_api" {
   name          = "AppSyncWebSocketAPI"
   protocol_type = "WEBSOCKET"
-  route_key     = "$connect"
+#   route_key     = "$connect"
+  route_selection_expression = "$request.body.action"
 }
 
+# WebSocket API integration - Allows connection from within the VPC
 resource "aws_apigatewayv2_integration" "ws_integration" {
-  api_id           = aws_apigatewayv2_api.websocket_api.id
-  integration_type = "HTTP_PROXY"
-  integration_uri  = "https://v557o3frxzge3lpvtoctdhvrgm.appsync-realtime-api.us-east-1.amazonaws.com/graphql"
-  connection_type  = "INTERNET"
-  integration_method = "POST" # Add the HTTP method
+  api_id             = aws_apigatewayv2_api.ws_api.id
+  integration_type   = "HTTP_PROXY"
+  integration_uri    = "https://v557o3frxzge3lpvtoctdhvrgm.appsync-realtime-api.us-east-1.amazonaws.com/graphql"
+  connection_type    = "VPC_LINK"
+  connection_id      = aws_apigatewayv2_vpc_link.my_vpc_link.id
+  integration_method = "POST"
+
+  # Pass Cognito Authorization token and API Key
+  request_parameters = {
+    "integration.request.header.Authorization" = "context.authorizer.claims['cognito:username']"
+    "integration.request.header.x-api-key"     = "context.requestOverride.headers['x-api-key']"
+  }
 }
 
+# VPC Link for API Gateway
+resource "aws_apigatewayv2_vpc_link" "my_vpc_link" {
+  name            = "vpc-link-for-websockets"
+  subnet_ids      = ["subnet-12345678", "subnet-23456789"]  # Replace with your actual subnet IDs
+  security_group_ids = [aws_security_group.websocket_sg.id]
+}
+
+# Security group allowing traffic from internal load balancer
+resource "aws_security_group" "websocket_sg" {
+  vpc_id = aws_vpc.example_vpc.id
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [aws_vpc.example_vpc.cidr_block] # cidr block containing load balancer
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# Define the VPC Interface Endpoint for AppSync (PrivateLink)
+resource "aws_vpc_endpoint" "appsync_vpce" {
+  vpc_id       = aws_vpc.main.id
+  service_name = "com.amazonaws.us-east-1.appsync-api"
+  subnet_ids   = [aws_subnet.private.id]
+  security_group_ids = [aws_security_group.default.id]
+  private_dns_enabled = true
+}
+
+# WebSocket API Route
 resource "aws_apigatewayv2_route" "ws_route" {
   api_id    = aws_apigatewayv2_api.websocket_api.id
   route_key = "$default"
   target    = "integrations/${aws_apigatewayv2_integration.ws_integration.id}"
 }
 
+# Apply the Cognito Authorizer to the WebSocket API
+resource "aws_apigatewayv2_route" "ws_route_with_authorizer" {
+  api_id    = aws_apigatewayv2_api.websocket_api.id
+  route_key = "$connect"
+  target    = "integrations/${aws_apigatewayv2_integration.ws_integration.id}"
+  authorizer_id = aws_apigatewayv2_authorizer.cognito_authorizer.id
+}
+
+# Cognito Authorizer for WebSocket API
+resource "aws_apigatewayv2_authorizer" "cognito_authorizer" {
+  api_id           = aws_apigatewayv2_api.websocket_api.id
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+
+  jwt_configuration {
+    audience = [aws_cognito_user_pool_client.appsync_cognito_client.id]
+    issuer   = "https://cognito-idp.us-east-1.amazonaws.com/${aws_cognito_user_pool.appsync_cognito_user_pool.id}"
+  }
+
+  name = "CognitoAuthorizer"
+}
+
+# WebSocket API Stage with CloudWatch Logs
+resource "aws_apigatewayv2_stage" "ws_stage" {
+  api_id      = aws_apigatewayv2_api.websocket_api.id
+  name        = "production"
+  deployment_id = aws_apigatewayv2_deployment.ws_deployment.id
+
+  default_route_settings {
+    logging_level = "INFO"
+    data_trace_enabled = true
+  }
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.websocket_api_logs.arn
+    format          = jsonencode({
+      requestId       = "$context.requestId"
+      ip              = "$context.identity.sourceIp"
+      caller          = "$context.identity.caller"
+      user            = "$context.identity.user"
+      requestTime     = "$context.requestTime"
+      httpMethod      = "$context.httpMethod"
+      resourcePath    = "$context.resourcePath"
+      status          = "$context.status"
+      protocol        = "$context.protocol"
+      responseLength  = "$context.responseLength"
+    })
+  }
+
+  auto_deploy = true
+}
+
+# Deployment for the WebSocket API
+# resource "aws_apigatewayv2_deployment" "ws_deployment" {
+#   api_id = aws_apigatewayv2_api.websocket_api.id
+#   depends_on = [aws_apigatewayv2_route.ws_route]
+# }
+
+#CLOUDWATCH
 # Create a role for API Gateway to write logs to CloudWatch
 resource "aws_iam_role" "apigateway_cloudwatch_role" {
   name = "APIGatewayCloudWatchLogsRole"
@@ -236,64 +379,10 @@ resource "aws_iam_role_policy" "apigateway_cloudwatch_policy" {
   })
 }
 
-# Stage for deployment
-resource "aws_api_gateway_stage" "mock_api_stage" {
-  rest_api_id   = aws_api_gateway_rest_api.mock_api.id
-  stage_name    = "test"
-  deployment_id = aws_api_gateway_deployment.mock_api_deployment.id
-
-  lifecycle {
-    ignore_changes = [stage_name]  # This will prevent Terraform from creating the stage if it exists
-  }
-}
-
-# Method settings for API Gateway stage
-resource "aws_api_gateway_method_settings" "mock_api_stage_method_settings" {
-  rest_api_id = aws_api_gateway_rest_api.mock_api.id
-  stage_name  = aws_api_gateway_stage.mock_api_stage.stage_name
-
-  method_path = "*/*"
-  settings {
-    metrics_enabled      = true
-    logging_level        = "INFO"
-    data_trace_enabled   = true
-  }
-}
-
 # CloudWatch log group for API Gateway logging
 resource "aws_cloudwatch_log_group" "api_gateway_logs" {
   name              = "/aws/apigateway/mock-api"
   retention_in_days = 14
-}
-
-# WebSocket API Deployment
-resource "aws_apigatewayv2_deployment" "ws_deployment" {
-  api_id = aws_apigatewayv2_api.websocket_api.id
-}
-
-# WebSocket API Stage with CloudWatch Logs
-resource "aws_apigatewayv2_stage" "ws_stage" {
-  api_id      = aws_apigatewayv2_api.websocket_api.id
-  name        = "production"
-#   deployment_id = aws_apigatewayv2_deployment.ws_deployment.id
-
-  access_log_settings {
-    destination_arn = aws_cloudwatch_log_group.websocket_api_logs.arn
-    format          = jsonencode({
-      requestId       = "$context.requestId"
-      ip              = "$context.identity.sourceIp"
-      caller          = "$context.identity.caller"
-      user            = "$context.identity.user"
-      requestTime     = "$context.requestTime"
-      httpMethod      = "$context.httpMethod"
-      resourcePath    = "$context.resourcePath"
-      status          = "$context.status"
-      protocol        = "$context.protocol"
-      responseLength  = "$context.responseLength"
-    })
-  }
-
-  auto_deploy = true
 }
 
 # CloudWatch Log Group for WebSocket API
