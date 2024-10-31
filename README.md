@@ -22,3 +22,8 @@ The repository is organized into several key directories, including:
 Contains helper scripts that assist with various tasks like code analysis, code quality checks, and managing the build process.
 
 
+# TODO
+- AWS Resources Deployed
+- Using AppSync
+- Private Chatbot
+- Document stores
