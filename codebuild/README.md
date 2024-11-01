@@ -1,36 +1,83 @@
-# AWS CI/CD Pipeline for React App
+# AWS CI/CD Pipeline with Multiple CodeBuild Projects
 
-This repository contains configurations and scripts to set up a CI/CD pipeline using AWS services like CodePipeline, CodeBuild, and S3 to build, test, and deploy a React application. The pipeline includes Dockerization of the application, with images stored in Amazon ECR.
-
----
+This repository contains configurations for setting up a CI/CD pipeline using AWS CodePipeline and CodeBuild. 
+The infrastructure is defined using Terraform to automate the deployment and building of various components within the application.
 
 ## Prerequisites
 
 To use the configurations and scripts in this repository, you will need the following:
 
-- **AWS CLI**
-- **Terraform** installed
-- **AWS account** with necessary permissions to create CodePipeline, CodeBuild, S3 buckets, Amazon ECR repositories, and other required resources.
+- AWS CLI
+- Terraform installed
+- AWS account with necessary permissions to create CodePipeline, CodeBuild, S3 buckets, and other required resources.
+
+---
+
+## Overview
+
+The CI/CD setup includes four different **AWS CodePipeline** pipelines, each linked to a dedicated **CodeBuild** project. 
+Each pipeline watches the same S3 bucket (`codebuild`) for changes and, upon detecting any modifications, initiates its respective CodeBuild process. 
+The pipelines and CodeBuild projects include:
+
+1. **Outgoing Messages** - Lambda Layer in TypeScript
+2. **Common Layer** - Lambda Layer with Python dependencies
+3. **File Upload Container** - Dockerized process for handling file uploads
+4. **React App** - Builds and deploys the React application
+
+## CodePipeline & CodeBuild Projects
+
+### 1. Outgoing Messages (Lambda Layer in TypeScript)
+
+- **Pipeline**: Watches the `codebuild` S3 bucket for changes related to the outgoing messages layer.
+- **CodeBuild Project**: This CodeBuild project is responsible for building a Lambda layer specifically written in TypeScript. 
+- **Key Steps**:
+  - **TypeScript Compilation**: Compiles the TypeScript files and packages them into a format compatible with AWS Lambda.
+  - **Deployment**: Uploads the resulting package to S3, making it available as a Lambda layer for other functions in the application.
+
+### 2. Common Layer (Lambda Layer with Python Dependencies)
+
+- **Pipeline**: Watches the `codebuild` S3 bucket for changes related to the common dependencies used across all Python-based Lambda functions in the application.
+- **CodeBuild Project**: This project builds a Lambda layer that includes shared Python dependencies.
+- **Key Steps**:
+  - **Dependency Installation**: Installs Python dependencies that are required across multiple Lambda functions.
+  - **Layer Packaging**: Packages the dependencies into a Lambda layer that can be attached to any Python Lambda function within the application.
+  - **Deployment**: The packaged Lambda layer is deployed to S3, allowing it to be reused in different Lambda functions.
+
+### 3. File Upload Container (Dockerized Process)
+
+- **Pipeline**: Monitors the `codebuild` S3 bucket for any updates related to the file upload container.
+- **CodeBuild Project**: This project builds a Docker image for handling file uploads.
+- **Key Steps**:
+  - **Docker Build**: Calls the `scripts/build.sh` script to build the Docker container defined in the Dockerfile.
+  - **ECR Upload**: Uses `scripts/upload.sh` to push the Docker container image to Amazon Elastic Container Registry (ECR).
+  - **Container Management**: Once uploaded, the container can be utilized by other services within the application for handling file uploads in a scalable manner.
+
+### 4. React App (Web Application)
+
+- **Pipeline**: Watches the `codebuild` S3 bucket for changes related to the React app source code.
+- **CodeBuild Project**: This project handles the build and deployment process of the React application.
+- **Key Steps**:
+  - **Environment Setup**: Runs `nvm install` to set up the necessary Node.js environment.
+  - **Application Build**: Runs `npm build` to generate a production-ready build of the React application.
+  - **Deployment**: Uses `upload.sh` to deploy the built app to an S3 bucket configured for web hosting.
 
 ---
 
 ## Terraform Configuration
 
-The `terraform/` folder contains the infrastructure as code to provision a CI/CD pipeline using AWS CodePipeline and CodeBuild.
+The `terraform/` folder contains infrastructure code to deploy the CodePipeline pipelines and CodeBuild projects.
 
 ### `sample.tf` Overview
 
-The `sample.tf` file defines a **CodePipeline** and **CodeBuild** project that builds a React app. Below is a high-level overview of its structure:
+The `sample.tf` file includes definitions for the following:
 
-- **S3 Bucket for Source**: This bucket is used to store the React app source code.
-- **CodeBuild Project**: Defines the build environment, specifying the compute resources and the runtime environment for building the React app.
-- **CodePipeline**: Automates the pipeline stages, from source retrieval to build execution and deployment.
+- **S3 Bucket for Source**: The bucket where source code and configuration files are uploaded. All pipelines monitor this bucket for changes.
+- **CodeBuild Projects**: Configurations for each CodeBuild project (Outgoing Messages, Common Layer, File Upload Container, React App), specifying build environments, compute resources, and runtime settings.
+- **CodePipeline Pipelines**: Each CodePipeline is associated with a specific CodeBuild project and will initiate the build process when changes in the `codebuild` S3 bucket are detected.
 
 ### Steps to Deploy
 
-1. **Configure Terraform**: Modify the variables in the `sample.tf` file as needed. Pay special attention to:
-   - The S3 bucket where your source code will be stored.
-   - The build environment and IAM roles required for CodeBuild and CodePipeline.
+1. **Configure Terraform**: Modify the variables in the `sample.tf` file as needed. Ensure that the S3 bucket, build environments, and IAM roles required for each CodeBuild project are correctly specified.
    
 2. **Run Terraform**:
    ```bash
@@ -38,104 +85,62 @@ The `sample.tf` file defines a **CodePipeline** and **CodeBuild** project that b
    terraform apply
    ```
 
-   This will provision the infrastructure, including the S3 bucket, CodeBuild project, and CodePipeline.
+   This will create the S3 bucket, CodeBuild projects, and CodePipeline pipelines for the four components.
 
-3. **Push Source Code to S3**: Upload the React app's source code to the S3 bucket that was created. The pipeline will automatically trigger a build.
+3. **Push Source Code to S3**: Upload the source code for each component to the `codebuild` S3 bucket. Each pipeline will automatically trigger the relevant build process.
 
 ---
 
 ## Build Scripts
 
-The repository includes several **build scripts** located in the `codebuild/` folder. These scripts are used by AWS CodeBuild to execute the build process for the React app and handle Dockerization.
+The repository includes build scripts located in the `codebuild/` folder, utilized by the different CodeBuild projects to execute the build and deployment processes.
 
 ### `buildspec.yml`
 
-The `buildspec.yml` file defines the sequence of steps that CodeBuild will execute. This file is responsible for running the `scripts/build.sh` script to build a Docker image, installing dependencies, and deploying the built image to Amazon ECR.
+The `buildspec.yml` file contains the build instructions for each CodeBuild project. Key phases in the file include:
 
-#### Key Phases in `buildspec.yml`
+1. **Install Dependencies**: Installs necessary libraries and dependencies based on the component being built.
+2. **Build Steps**:
+   - **For React App**: Runs `npm build` to compile the application.
+   - **For File Upload Container**: Calls `scripts/build.sh` to build the Docker container and `scripts/upload.sh` to push it to ECR.
+3. **Deployment**: Specifies deployment steps where applicable, such as uploading the React app to an S3 bucket or deploying Lambda layers to S3.
 
-1. **Install Dependencies**: 
-   - Installs any required tools and dependencies, including Docker CLI, necessary for building and managing Docker containers.
-   
-2. **Pre-Build Phase**:
-   - Authenticates to Amazon ECR using the AWS CLI to ensure CodeBuild can push Docker images to ECR.
+### `build.sh` (Docker Build Script)
 
-3. **Build Phase**:
-   - Executes the `scripts/build.sh` script, which builds a Docker container that includes all dependencies needed to run the React application. This includes:
-     - Installing dependencies using `npm`.
-     - Compiling the application for production using `npm run build`.
-   - The Docker container is tagged with the repository URI and version, preparing it for upload to ECR.
+This script builds a Docker container, typically for the File Upload Container project, and includes the following steps:
 
-4. **Post-Build Phase**:
-   - Executes the `scripts/upload.sh` script, which pushes the Docker image to Amazon ECR, making it available for deployment in subsequent stages of the pipeline.
+1. **Install Dependencies**: Installs all dependencies specified in the Dockerfile.
+2. **Build Container**: Creates the Docker image.
+3. **Push to ECR**: Uses `scripts/upload.sh` to upload the image to Amazon ECR.
 
-### `build.sh`
+### `upload.sh` (ECR Upload Script)
 
-The `scripts/build.sh` script is a custom shell script responsible for:
-
-1. **Building the Docker Image**: The script defines a Dockerfile (or uses an existing one) that installs all dependencies and builds the React app within a containerized environment. This ensures that the application is packaged with the required dependencies in a consistent environment.
-   
-2. **Tagging the Image**: After building the image, it is tagged using the ECR repository URI and the current Git commit hash (or another unique identifier) to ensure version control of images.
-
-3. **Running Local Tests (Optional)**: If specified, the script can run tests on the application to verify its integrity before deployment.
-
-The result is a Docker image that encapsulates the production-ready React application, along with all dependencies.
-
-### `upload.sh`
-
-The `scripts/upload.sh` script is responsible for uploading the Docker image created by `build.sh` to Amazon ECR. This script performs the following steps:
-
-1. **Authenticate with ECR**: Ensures that the Docker CLI is authenticated with ECR to allow pushing images.
-
-2. **Push the Docker Image**: Pushes the Docker image to the specified ECR repository. The image is now available for use in the deployment phase.
-
-3. **Logging**: Provides logs for troubleshooting and to verify successful image upload.
+This script is used by the **File Upload Container** project to push the Docker image to Amazon ECR. It handles authentication with ECR and ensures that the Docker image is uploaded successfully, making it available for deployment.
 
 ---
 
 ## CI/CD Pipeline
 
-Once the infrastructure is deployed and source code is uploaded to the S3 bucket, the CodePipeline will automatically start:
+After deployment and source code upload, the CodePipeline pipelines will automatically start the build and deployment process for each component:
 
-1. **Source Stage**: Retrieves the source code from the S3 bucket.
-2. **Build Stage**: Executes the build process using AWS CodeBuild, running `buildspec.yml` to build and push the Docker image to ECR.
-3. **Deploy Stage**: In a complete deployment setup, the Docker image could be pulled from ECR and deployed to ECS, EKS, or another service for hosting the React app.
-
-The build logs for each phase can be viewed in the CodeBuild console, allowing for monitoring and debugging.
+1. **Source Stage**: Retrieves the source code from the `codebuild` S3 bucket.
+2. **Build Stage**: Executes the build process using AWS CodeBuild.
+3. **Deploy Stage**: Deploys the built components to their respective destinations (e.g., Lambda layers, S3, or ECR).
 
 ---
 
 ## `scripts/` Folder Overview
 
-The `scripts/` folder contains helper scripts focused on automating the Dockerization process, handling image uploads, and managing dependencies.
+The `scripts/` folder contains helper scripts that automate aspects of the build process, particularly for Docker and ECR uploads.
 
 ### Scripts Overview
 
 1. **`build.sh`**
-   - Custom script that builds the Docker image for the React app, including all dependencies and production configurations.
-   - Usage: Run automatically by CodeBuild as part of the build process, but can also be run locally for testing.
+   - This script is used to build a Docker container, which is primarily used by the **File Upload Container** project.
+   - Usage: Customizable for including additional steps in the Docker build process, such as optimizations.
 
 2. **`upload.sh`**
-   - Script responsible for pushing the Docker image created by `build.sh` to Amazon ECR.
-   - Usage: Also run by CodeBuild after building the Docker image, making the image available in ECR for deployment.
+   - This script authenticates with ECR and uploads Docker images built by `build.sh`.
+   - Ensures that Docker images are pushed to ECR and available for deployment.
 
 ---
-
-## Example Usage of Scripts
-
-To build and push the Docker image locally (assuming AWS CLI is configured and Docker is installed):
-
-```bash
-# Build the Docker image
-./scripts/build.sh
-
-# Push the image to ECR
-./scripts/upload.sh
-```
-
----
-
-## Troubleshooting
-
-- **Build Errors**: Check CloudWatch Logs and CodeBuild logs for detailed error messages. Ensure Docker is correctly configured and authenticated with ECR.
-- **Permission Issues**: Ensure the IAM role specified in CodeBuild has permissions for ECR, S3, and other services as required.
